@@ -63,7 +63,7 @@ mnist_dataloader = DataLoader(
 
 ### Model definition
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = UNet(latent_dim=1024, in_channels=1, out_channels=1).to(device)
+model = UNet(latent_dim=512, in_channels=3, out_channels=3).to(device)
 model.init_weights()
 # optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
 optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=1e-2)
@@ -99,11 +99,11 @@ sqrt_acum = alphas_cumprod.sqrt()
 sqrt_1macum = (1-alphas_cumprod).sqrt()
 
 
-# exp_name = f"ddpm_cifar10_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-exp_name = f"ddpm_mnist_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+exp_name = f"ddpm_cifar10_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+# exp_name = f"ddpm_mnist_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 writer = SummaryWriter(log_dir=f"runs/{exp_name}")
 
-hparams = {"lr": 1e-4, "batch_size": 64}
+hparams = {"lr": 5e-5, "batch_size": 128}
 
 
 
@@ -129,7 +129,8 @@ def train(model, dataloader, optimizer, criterion, num_epochs=20):
             predicted_noise = model(noisy_images, t)
 
             # Compute the loss
-            loss = criterion(predicted_noise, noise) / sqrt_1macum[t].view(-1, 1, 1, 1).mean()
+            # loss = criterion(predicted_noise, noise) / sqrt_1macum[t].view(-1, 1, 1, 1).mean()
+            loss = criterion(predicted_noise, noise)
             optimizer.zero_grad()
             loss.backward()
             # Clip gradients
@@ -199,8 +200,8 @@ def sample(model, img_size=(3, 32, 32), writer=None, num_images=8, global_step=0
 
 # Sample and visualize the generated image
 # Training the model
-sample_input = torch.randn(1,1,32,32,device=device)
+sample_input = torch.randn(1,3,32,32,device=device)
 # sample_input = torch.randn(1, 3, 32, 32, device=device)
 writer.add_graph(model, (sample_input, torch.tensor([0],device=device)))
 
-model = train(model, mnist_dataloader, optimizer, criterion, num_epochs=200)
+model = train(model, cifar10_dataloader, optimizer, criterion, num_epochs=200)
