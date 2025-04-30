@@ -63,7 +63,7 @@ mnist_dataloader = DataLoader(
 
 ### Model definition
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = UNet(latent_dim=512, in_channels=1, out_channels=1).to(device)
+model = UNet(latent_dim=1024, in_channels=1, out_channels=1).to(device)
 model.init_weights()
 # optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
 optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=1e-2)

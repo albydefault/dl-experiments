@@ -12,137 +12,80 @@ from tqdm import tqdm
 
 import numpy as np
 import matplotlib.pyplot as plt
+import math
+
+def sinusoidal_positional_encoding(timesteps, dim):
+    """
+    Generates sinusoidal positional encoding.
+    Args:
+        timesteps: torch.Tensor of shape (batch_size, 1)
+        dim: int, the dimension of the encoding.
+    Returns:
+        torch.Tensor of shape (batch_size, dim)
+    """
+    half_dim = dim // 2
+    freq_embeddings = math.log(10000) / (half_dim - 1)
+    freq_embeddings = torch.exp(torch.arange(half_dim, device=timesteps.device) * -freq_embeddings)
+
+    time_embeddings = timesteps.unsqueeze(1) * freq_embeddings.unsqueeze(0)
+
+    final_embeddings = torch.cat((time_embeddings.sin(), time_embeddings.cos()), dim=-1)
+    
+    if dim % 2 == 1:
+        if final_embeddings.shape[1] < dim:
+            final_embeddings = F.pad(final_embeddings, (0, 1))
+    
+    return final_embeddings
+
 
 class UNet32(nn.Module):
-    def __init__(self, in_channels=3, out_channels=3, latent_dim=256):
+    def __init__(self, in_channels=3, out_channels=3, latent_dim=256, time_emb_dim=256):
         super(UNet32, self).__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-
         self.dim3 = latent_dim
         self.dim2 = latent_dim // 2
         self.dim1 = latent_dim // 4
 
+        self.time_mlp = nn.Sequential(
+            nn.Linear(time_emb_dim, time_emb_dim * 4),
+            nn.SiLU(),
+            nn.Linear(time_emb_dim * 4, time_emb_dim)
+        )
+        self.time_emb_dim = time_emb_dim
+
         # We expect the input to be of shape (batch_size, 3, 32, 32)
 
         # Encoding blocks
-        # Input image: (batch_size, 3, 32, 32)
-        # Output image: (batch_size, 64, 32, 32)
-        self.block1 = nn.Sequential(
-            nn.Conv2d(in_channels, self.dim1, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim1),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(self.dim1, self.dim1, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim1),
-            nn.LeakyReLU(inplace=True),
-        )
 
-        # Previous block output: (batch_size, 64, 32, 32)
-        # Max pooling: (batch_size, 64, 16, 16)
-        # Output image: (batch_size, 128, 16, 16)
-        self.block2 = nn.Sequential(
-            nn.Conv2d(self.dim1, self.dim2, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim2),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(self.dim2, self.dim2, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim2),
-            nn.LeakyReLU(inplace=True),
-            # nn.Dropout2d(0.3),
-        )
+        self.t_proj1 = nn.Linear(time_emb_dim, self.dim1)
+        self.block1 = self._make_block(in_channels, self.dim1)
 
-        # Previous block output: (batch_size, 128, 16, 16)
-        # Max pooling: (batch_size, 128, 8, 8)
-        # Output image: (batch_size, 256, 8, 8)
-        self.block3 = nn.Sequential(
-            nn.Conv2d(self.dim2, self.dim3, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim3),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(self.dim3, self.dim3, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim3),
-            nn.LeakyReLU(inplace=True),
-            # nn.Dropout2d(0.3),
-        )
-        
+        self.t_proj2 = nn.Linear(time_emb_dim, self.dim2)
+        self.block2 = self._make_block(self.dim1, self.dim2)
+
+        self.t_proj3 = nn.Linear(time_emb_dim, self.dim3)
+        self.block3 = self._make_block(self.dim2, self.dim3)
+
+        self.maxpool = nn.MaxPool2d(2)
+
         # Decoding blocks
-        # Previous block output: (batch_size, 256, 8, 8)
-        # Upconv: (batch_size, 128, 16, 16)
-        # Concatenate with block2 output: (batch_size, 256, 16, 16)
-        # Output image: (batch_size, 128, 16, 16)
-        self.block4 = nn.Sequential(
-            nn.Conv2d(self.dim3, self.dim2, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim2),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(self.dim2, self.dim2, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim2),
-            nn.LeakyReLU(inplace=True),
-        )
-
-        # Previous block output: (batch_size, 128, 16, 16)
-        # Upconv: (batch_size, 64, 32, 32)
-        # Concatenate with block1 output: (batch_size, 128, 32, 32)
-        # Output image: (batch_size, 64, 32, 32)
-        self.block5 = nn.Sequential(
-            nn.Conv2d(self.dim2, self.dim1, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim1),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(self.dim1, self.dim1, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim1),
-            nn.LeakyReLU(inplace=True),
-        )
-
-        # Input image: (batch_size, 64, 32, 32)
-        # Output image: (batch_size, 3, 32, 32)
-        self.block6 = nn.Sequential(
-            nn.Conv2d(self.dim1, self.out_channels, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=self.out_channels, num_channels=self.out_channels),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(self.out_channels, self.out_channels, kernel_size=3, stride=1, padding=1),
-            # nn.Tanh(), 
-        )
-
-        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        # Input image: (batch_size, 256, 8, 8)
-        # Output image: (batch_size, 128, 16, 16)
         self.upconv1 = nn.ConvTranspose2d(self.dim3, self.dim2, kernel_size=2, stride=2)
+        self.t_proj4 = nn.Linear(time_emb_dim, self.dim2)
+        self.block4 = self._make_block(self.dim2 * 2, self.dim2)
 
-        # Input image: (batch_size, 128, 16, 16)
-        # Output image: (batch_size, 64, 32, 32)
         self.upconv2 = nn.ConvTranspose2d(self.dim2, self.dim1, kernel_size=2, stride=2)
+        self.t_proj5 = nn.Linear(time_emb_dim, self.dim1)
+        self.block5 = self._make_block(self.dim1 * 2, self.dim1)
+
+
+        # self.upconv1 = nn.ConvTranspose2d(self.dim3, self.dim2, kernel_size=2, stride=2)
+        # self.upconv2 = nn.ConvTranspose2d(self.dim2, self.dim1, kernel_size=2, stride=2)
         
-        self.upconv3 = nn.Sequential(
-            nn.Conv2d(self.dim1, self.dim1, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim1),
+        self.t_proj6 = nn.Linear(time_emb_dim, self.dim1)
+        self.block6 = nn.Sequential(
+            nn.Conv2d(self.dim1, self.dim1, kernel_size=3, padding=1),
+            nn.GroupNorm(8, self.dim1),
             nn.LeakyReLU(inplace=True),
-            nn.Conv2d(self.dim1, self.dim1, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim1),
-            nn.LeakyReLU(inplace=True),
-        )
-
-        self.upconv4 = nn.Sequential(
-            nn.Conv2d(self.dim1, self.dim1, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim1),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(self.dim1, self.dim1, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=32, num_channels=self.dim1),
-            nn.LeakyReLU(inplace=True),
-        )
-
-        self.mlp1 = nn.Sequential(
-            nn.Linear(1, self.dim3),
-            nn.LeakyReLU(inplace=True),
-            nn.Linear(self.dim3, 1024)
-        )
-        self.mlp2 = nn.Sequential(
-            nn.Linear(1, self.dim3),
-            nn.LeakyReLU(inplace=True),
-            nn.Linear(self.dim3, 256),
-        )
-
-        self.mlp3 = nn.Sequential(
-            nn.Linear(1, self.dim3),
-            nn.LeakyReLU(inplace=True),
-            nn.Linear(self.dim3, 64)
+            nn.Conv2d(self.dim1, out_channels, kernel_size=1)
         )
 
         def positional_encoding(x, dim, max_len=1000):
@@ -157,48 +100,50 @@ class UNet32(nn.Module):
             pe[:, 1::2] = torch.cos(pos * div_term)
             pe = pe.unsqueeze(0)
             return nn.Parameter(pe)
-        
-        self.pe1 = positional_encoding(torch.arange(0, 1000).unsqueeze(0), 1024) # (1, 1000, 1024)
-        self.pe2 = positional_encoding(torch.arange(0, 1000).unsqueeze(0), 256) # (1, 1000, 256)
-        self.pe3 = positional_encoding(torch.arange(0, 1000).unsqueeze(0), 64) # (1, 1000, 64)
-        # self.init_weights()
+
+
+    def _make_block(self, in_channels, out_channels):
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(8, out_channels), # GroupNorm is common in DDPMs
+            nn.LeakyReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(8, out_channels),
+            nn.LeakyReLU(inplace=True)
+        )
 
 
     def forward(self, x, t):
+        t_input = t.float().squeeze(-1)
+        if t_input.ndim == 0:
+            t_input = t_input.unsqueeze(0)
+        sin_emb = sinusoidal_positional_encoding(t_input, self.time_emb_dim)
+        temb = self.time_mlp(sin_emb)
+
         # Encoding
-        t = t.float() # (batch_size, 1)
+        enc1 = self.block1(x)
+        enc1 = enc1 + self.t_proj1(temb)[:, :, None, None]
 
-        enc1 = self.block1(x) # (batch_size, 64, 32, 32)
-        tenc1 = self.mlp1(t) # (batch_size, 1024)
-        tenc1 += self.pe1[:, t.long().squeeze(), :].squeeze(0) # (batch_size, 1024)
-        tenc1 = tenc1.view(-1, 1, 32, 32) # (batch_size, 1, 32, 32)
-        enc1 = enc1 + tenc1
+        enc2 = self.block2(self.maxpool(enc1))
+        enc2 = enc2 + self.t_proj2(temb)[:, :, None, None]
 
-        enc2 = self.block2(self.maxpool(enc1)) # (batch_size, 128, 16, 16)
-        tenc2 = self.mlp2(t)
-        tenc2 += self.pe2[:, t.long().squeeze(), :].squeeze(0) # (batch_size, 256)
-        tenc2 = tenc2.view(-1, 1, 16, 16)
-        enc2 = enc2 + tenc2
-
-        enc3 = self.block3(self.maxpool(enc2)) # (batch_size, 256, 8, 8)
-        tenc3 = self.mlp3(t)
-        tenc3 += self.pe3[:, t.long().squeeze(), :].squeeze(0) # (batch_size, 64)
-        tenc3 = tenc3.view(-1, 1, 8, 8)
-        enc3 = enc3 + tenc3
+        enc3 = self.block3(self.maxpool(enc2))
+        enc3 = enc3 + self.t_proj3(temb)[:, :, None, None]
 
         # Decoding
-        dec1 = self.upconv1(enc3) # (batch_size, 128, 16, 16)
-        dec1 = torch.cat((dec1, enc2), dim=1) # (batch_size, 256, 16, 16)
-        dec1 = self.block4(dec1) # (batch_size, 128, 16, 16)
+        dec1 = self.upconv1(enc3)
+        dec1 = torch.cat((dec1, enc2), dim=1)
+        dec1 = self.block4(dec1)
+        dec1 = dec1 + self.t_proj4(temb)[:, :, None, None]
 
-        dec2 = self.upconv2(dec1) # (batch_size, 64, 32, 32)
-        dec2 = torch.cat((dec2, enc1), dim=1) # (batch_size, 128, 32, 32)
-        dec2 = self.block5(dec2) # (batch_size, 64, 32, 32)
+        dec2 = self.upconv2(dec1)
+        dec2 = torch.cat((dec2, enc1), dim=1)
+        dec2 = self.block5(dec2)
+        dec2 = dec2 + self.t_proj5(temb)[:, :, None, None]
 
-        dec2 = self.upconv3(dec2) # (batch_size, 64, 32, 32)
-        dec2 = self.upconv4(dec2) # (batch_size, 64, 32, 32)
+        out = dec2 + self.t_proj6(temb)[:, :, None, None]
+        out = self.block6(out)
 
-        out = self.block6(dec2) # (batch_size, 3, 32, 32)
         return out
     
     def init_weights(self):
