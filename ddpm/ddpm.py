@@ -9,7 +9,7 @@ from torchvision import datasets, transforms
 from torchvision.datasets import CIFAR10, MNIST
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from torch.utils.tensorboard import SummaryWriter
+
 from torchvision.utils import make_grid
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
@@ -18,8 +18,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import datetime
 
+import wandb
+
 # Local application imports
 from model import UNet32 as UNet
+from model import WNet32 as WNet
+
 ### Data preparation
 DATASET_DIR = "/home/alazar/desktop/datasets"
 
@@ -63,9 +67,8 @@ mnist_dataloader = DataLoader(
 
 ### Model definition
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = UNet(latent_dim=512, in_channels=3, out_channels=3).to(device)
-model.init_weights()
-# optimizer = torch.optim.Adam(model.parameters(), lr=5e-5)
+model = WNet(latent_dim=256, in_channels=3, out_channels=3).to(device)
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=1e-2)
 scheduler = CosineAnnealingLR(optimizer, T_max=200, eta_min=1e-6)
 criterion = nn.MSELoss()
@@ -83,10 +86,6 @@ def cosine_beta_schedule(timesteps, s=0.008):
 
 STEP_COUNT = 1000
 betas = cosine_beta_schedule(STEP_COUNT, s=0.008)
-# betas = (betas - betas.min()) / (betas.max() - betas.min())
-# betas = betas * torch.pi / 2
-# betas = torch.sin(betas)
-# betas = betas * (0.02 - 1e-4) + 1e-4
 
 alphas = 1 - betas
 alphas_cumprod = torch.cumprod(alphas, dim=0)
@@ -101,9 +100,29 @@ sqrt_1macum = (1-alphas_cumprod).sqrt()
 
 exp_name = f"ddpm_cifar10_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 # exp_name = f"ddpm_mnist_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-writer = SummaryWriter(log_dir=f"runs/{exp_name}")
 
-hparams = {"lr": 5e-5, "batch_size": 128}
+
+wandb.init(
+    project="ddpm-cifar10", # Change project name if needed
+    name=exp_name,
+    config={
+        "learning_rate": 5e-5,
+        "batch_size": 128,
+        "epochs": 200,
+        "step_count": STEP_COUNT,
+        "beta_schedule": "cosine",
+        "optimizer": "AdamW",
+        "criterion": "MSELoss",
+        "weight_decay": 1e-2,
+        "scheduler": "CosineAnnealingLR",
+        "T_max": 200,
+        "eta_min": 1e-6,
+        "clip_grad_norm": 1.0,
+        "dataset": "CIFAR10", # Change if using MNIST
+        "model": "UNet32",
+        "latent_dim": 512,
+    }
+)
 
 
 
@@ -129,38 +148,49 @@ def train(model, dataloader, optimizer, criterion, num_epochs=20):
             predicted_noise = model(noisy_images, t)
 
             # Compute the loss
-            # loss = criterion(predicted_noise, noise) / sqrt_1macum[t].view(-1, 1, 1, 1).mean()
+
             loss = criterion(predicted_noise, noise)
             optimizer.zero_grad()
             loss.backward()
+
             # Clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
             running_loss += loss.item()
 
-            writer.add_scalar("loss/train_step", loss.item(), global_step)
+            wandb.log({"loss/traing_step": loss.item()}, step=global_step)
             if global_step % 500 == 0:
-                writer.add_images("noisy_images", (1 + noisy_images[:8].clamp(-1, 1)) / 2, global_step, dataformats='NCHW')
+                wandb.log({
+                    "noisy_images": wandb.Image((1 + noisy_images[:8].clamp(-1, 1)) / 2),
+                }, step=global_step)
+
+                
                 one_minus_acum = sqrt_1macum[t].view(-1, 1, 1, 1)
                 acum = sqrt_acum[t].view(-1, 1, 1, 1)
                 predicted_images = (noisy_images - one_minus_acum * predicted_noise) / acum
-                writer.add_images("predicted_images", (1 + predicted_images[:8].clamp(-1, 1)) / 2, global_step, dataformats='NCHW')
+
+                wandb.log({
+                    "predicted_images": wandb.Image((1 + predicted_images[:8].clamp(-1, 1)) / 2),
+                }, step=global_step)
 
                 with torch.no_grad():
-                    samples = sample(model, img_size=images.size()[1:], writer=writer, global_step=global_step)
+                    samples = sample(model, img_size=images.size()[1:])
                     samples = (samples.clamp(-1, 1) + 1) / 2
-                    grid = make_grid(samples, nrow=4, normalize=True)
-                    writer.add_image("generated_images", grid, global_step)
+                    
+                    wandb.log({
+                        "generated_images": wandb.Image(samples),
+                    }, step=global_step)
 
             global_step += 1
         
-        writer.add_scalar("lr/train_step", scheduler.get_last_lr()[0], global_step)
+        wandb.log({
+            "lr/train_step": scheduler.get_last_lr()[0],
+        }, step=global_step)
         scheduler.step()
 
         epoch_loss = running_loss / len(dataloader)
-        writer.add_scalar("loss/train_epoch", epoch_loss, epoch)
-        # writer.add_hparams(hparams, {"hparam/loss": epoch_loss})
+        wandb.log({"loss/train_epoch": epoch_loss, "epoch": epoch}, step=global_step)
         print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}")
 
         # Save the model every 5 epochs 
@@ -169,14 +199,12 @@ def train(model, dataloader, optimizer, criterion, num_epochs=20):
         #     print(f"Model saved at epoch {epoch + 1}")
 
     # Save the final model  
-    # torch.save(model.state_dict(), "model_final.pth")
-    # writer.add_hparams(hparams, {"hparam/loss": epoch_loss})
-
-    writer.close()
-    print("Training complete. Model saved.")
+    wandb.finish()
+    print("Training complete.")
     return model
+
 ### Sampling
-def sample(model, img_size=(3, 32, 32), writer=None, num_images=8, global_step=0):
+def sample(model, img_size=(3, 32, 32), num_images=8,):
     model.eval()
     with torch.no_grad():
         # Start with random noise
@@ -198,10 +226,4 @@ def sample(model, img_size=(3, 32, 32), writer=None, num_images=8, global_step=0
                         
         return x
 
-# Sample and visualize the generated image
-# Training the model
-sample_input = torch.randn(1,3,32,32,device=device)
-# sample_input = torch.randn(1, 3, 32, 32, device=device)
-writer.add_graph(model, (sample_input, torch.tensor([0],device=device)))
-
-model = train(model, cifar10_dataloader, optimizer, criterion, num_epochs=200)
+model = train(model, cifar10_dataloader, optimizer, criterion, num_epochs=400)

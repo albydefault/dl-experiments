@@ -75,10 +75,6 @@ class UNet32(nn.Module):
         self.upconv2 = nn.ConvTranspose2d(self.dim2, self.dim1, kernel_size=2, stride=2)
         self.t_proj5 = nn.Linear(time_emb_dim, self.dim1)
         self.block5 = self._make_block(self.dim1 * 2, self.dim1)
-
-
-        # self.upconv1 = nn.ConvTranspose2d(self.dim3, self.dim2, kernel_size=2, stride=2)
-        # self.upconv2 = nn.ConvTranspose2d(self.dim2, self.dim1, kernel_size=2, stride=2)
         
         self.t_proj6 = nn.Linear(time_emb_dim, self.dim1)
         self.block6 = nn.Sequential(
@@ -88,18 +84,9 @@ class UNet32(nn.Module):
             nn.Conv2d(self.dim1, out_channels, kernel_size=1)
         )
 
-        def positional_encoding(x, dim, max_len=1000):
-            # x: (batch_size, 1)
-            
-            x = x.repeat(1, dim) # (batch_size, dim)
-            # apply sinusoidal encoding
-            div_term = torch.exp(torch.arange(0, dim, 2).float() * -(np.log(10000.0) / dim))
-            pos = torch.arange(0, max_len).unsqueeze(1).float() # (max_len, 1)
-            pe = torch.zeros(max_len, dim).float()
-            pe[:, 0::2] = torch.sin(pos * div_term)
-            pe[:, 1::2] = torch.cos(pos * div_term)
-            pe = pe.unsqueeze(0)
-            return nn.Parameter(pe)
+        self.init_weights()
+        self.apply(self.init_weights)        
+
 
 
     def _make_block(self, in_channels, out_channels):
@@ -161,3 +148,13 @@ class UNet32(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
 
+class WNet32(nn.Module):
+    def __init__(self, in_channels=3, out_channels=3, latent_dim=256, time_emb_dim=256):
+        super(WNet32, self).__init__()
+        self.first = UNet32(in_channels, out_channels, latent_dim, time_emb_dim)
+        self.second = UNet32(in_channels, out_channels, latent_dim, time_emb_dim)
+
+    def forward(self, x, t):
+        x = self.first(x, t)
+        x = self.second(x, t)
+        return x
