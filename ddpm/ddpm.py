@@ -214,7 +214,7 @@ def sample(model, img_size=(3, 32, 32), num_images=8,):
             # Compute the predicted noise
             t_tensor = torch.full((num_images,1), t, device=device, dtype=torch.long)
             predicted_noise = model(x, t_tensor)
-            x_mean = (x - (1 - alphas[t]) * predicted_noise / sqrt_1macum[t]) / torch.sqrt(alphas[t])
+            x_mean = (x - (1 - alphas[t]) * predicted_noise / sqrt_1macum[t]) / sqrt_alphas[t]
 
             if t > 0:
                 posterior_var = betas[t] * (1 - alphas_cumprod[t-1])/(1 - alphas_cumprod[t])
