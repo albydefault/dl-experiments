@@ -14,7 +14,7 @@ def load_yaml(path: str):
 # Argparse for command line arguments
 parser = argparse.ArgumentParser()
 parser.add_argument("--config", type=str, help="Path to the config file", default="config/cifar10.yaml")
-parser.add_argument("--exp_name", type=str, help="Experiment name", default=f"_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+parser.add_argument("--exp_name", type=str, help="Experiment name", default=f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
 parser.add_argument("--epochs", type=int, help="Number of epochs", default=200)
 parser.add_argument("--batch_size", type=int, help="Batch size", default=128)
 parser.add_argument("--lr", type=float, help="Learning rate", default=5e-5)
