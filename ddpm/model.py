@@ -14,6 +14,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 
+MODEL_REGISTRY = {}
+
+def register_model(name):
+    """
+    A decorator to register a model class in the MODEL_REGISTRY.
+    """
+    def decorator(model_class):
+        MODEL_REGISTRY[name] = model_class
+        return model_class
+    return decorator
+
 def sinusoidal_positional_encoding(timesteps, dim):
     """
     Generates sinusoidal positional encoding.
@@ -37,7 +48,7 @@ def sinusoidal_positional_encoding(timesteps, dim):
     
     return final_embeddings
 
-
+@register_model("unet32")
 class UNet32(nn.Module):
     def __init__(self, in_channels=3, out_channels=3, latent_dim=256, time_emb_dim=256):
         super(UNet32, self).__init__()
@@ -85,7 +96,7 @@ class UNet32(nn.Module):
         )
 
         self.init_weights()
-        self.apply(self.init_weights)        
+
 
 
 
@@ -147,7 +158,7 @@ class UNet32(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-
+@register_model("wnet32")
 class WNet32(nn.Module):
     def __init__(self, in_channels=3, out_channels=3, latent_dim=256, time_emb_dim=256):
         super(WNet32, self).__init__()
