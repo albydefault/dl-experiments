@@ -169,3 +169,36 @@ class WNet32(nn.Module):
         x = self.first(x, t)
         x = self.second(x, t)
         return x
+
+@register_model("recurrent_wnet32")
+class RecurrentWNet32(nn.Module):
+    def __init__(self, in_channels=3, out_channels=3, latent_dim=256, time_emb_dim=256):
+        super(RecurrentWNet32, self).__init__()
+        self.first = UNet32(in_channels, out_channels, latent_dim, time_emb_dim)
+        self.second = UNet32(in_channels, out_channels, latent_dim, time_emb_dim)
+
+    def forward(self, x, t):
+        first_x = self.first(x, t)
+        second_x = self.second(x, t)
+        third_x = self.second(first_x, t)
+        return (first_x + second_x + third_x) / 3
+
+@register_model("unet_attn")
+class UNetAttn(nn.Module):
+    def __init__(self, in_channels=3, out_channels=3, latent_dim=256, time_emb_dim=256):
+        super(UNetAttn, self).__init__()
+        self.unet = UNet32(in_channels, 16, latent_dim, time_emb_dim)
+        self.attn = nn.MultiheadAttention(embed_dim=16, num_heads=8, batch_first=True)
+        self.pos_emb = nn.Parameter(torch.randn(32 * 32, 16))
+        self.output_layer = nn.Conv2d(16, out_channels, kernel_size=1)
+
+    def forward(self, x, t):
+        x = self.unet(x, t)
+        b, c, h, w = x.size()
+
+        x_flat = x.view(b, c, -1).permute(0, 2, 1)  # (batch_size, h*w, channels)
+        x_flat += self.pos_emb.unsqueeze(0)  # Add positional encoding
+        attn_output, _ = self.attn(x_flat, x_flat, x_flat)
+        out = attn_output.permute(0, 2, 1).view(b, c, h, w)  # (batch_size, channels, h*w)
+        out = self.output_layer(out)
+        return out
