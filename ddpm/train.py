@@ -18,7 +18,7 @@ parser.add_argument("--exp_name", type=str, help="Experiment name (will be auto-
 parser.add_argument("--exp_type", type=str, help="Experiment type (e.g., baseline, ablation, tuning)", default="baseline")
 parser.add_argument("--epochs", type=int, help="Number of epochs", default=200)
 parser.add_argument("--batch_size", type=int, help="Batch size", default=128)
-parser.add_argument("--lr", type=float, help="Learning rate", default=5e-5)
+parser.add_argument("--lr", type=float, help="Learning rate", default=2e-4)
 parser.add_argument("--latent_dim", type=int, help="Latent dimension", default=512)
 parser.add_argument("--step_count", type=int, help="Number of steps", default=1000)
 parser.add_argument("--model", type=str, help="Model name", default="unet32")
@@ -64,7 +64,7 @@ model = model_cls(
     latent_dim=config["latent_dim"],
     time_emb_dim=config["time_emb_dim"]
 ).to(device)
-optimizer = torch.optim.AdamW(model.parameters(), lr=config["lr"], weight_decay=1e-2)
+optimizer = torch.optim.AdamW(model.parameters(), lr=config["lr"], weight_decay=1e-4)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config["epochs"], eta_min=1e-6)
 criterion = nn.MSELoss()
 
