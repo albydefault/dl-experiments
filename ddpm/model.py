@@ -91,7 +91,7 @@ class UNet32(nn.Module):
         self.block6 = nn.Sequential(
             nn.Conv2d(self.dim1, self.dim1, kernel_size=3, padding=1),
             nn.GroupNorm(8, self.dim1),
-            nn.LeakyReLU(inplace=True),
+            nn.SiLU(inplace=True),
             nn.Conv2d(self.dim1, out_channels, kernel_size=1)
         )
 
@@ -104,10 +104,10 @@ class UNet32(nn.Module):
         return nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
             nn.GroupNorm(8, out_channels), # GroupNorm is common in DDPMs
-            nn.LeakyReLU(inplace=True),
+            nn.SiLU(inplace=True),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             nn.GroupNorm(8, out_channels),
-            nn.LeakyReLU(inplace=True)
+            nn.SiLU(inplace=True)
         )
 
 
