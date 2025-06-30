@@ -28,12 +28,14 @@ def make_cifar10_loader(batch_size=128, resize=(32, 32)):
         root=DATASET_DIR,
         train=True,
         download=True,
-        transform=transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Resize(resize),
-            transforms.RandomHorizontalFlip(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        ])
+        transform=transforms.Compose(
+            [transforms.Resize(resize)] if resize != (32, 32) else []
+            + [
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+            ]
+        )
     )
     return DataLoader(
         cifar10_dataset,
@@ -51,8 +53,8 @@ def make_mnist_loader(batch_size=128, resize=(32, 32)):
         train=True,
         download=True,
         transform=transforms.Compose([
-            transforms.ToTensor(),
             transforms.Resize(resize),
+            transforms.ToTensor(),
             transforms.Normalize((0.5,), (0.5,)),
         ])
     )
@@ -71,7 +73,9 @@ def make_celeba_loader(batch_size=128, resize=(32, 32)):
         split='train',
         download=True,
         transform=transforms.Compose([
+            transforms.CenterCrop(178),  # CelebA images are 178x218
             transforms.Resize(resize),
+            transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
         ])
