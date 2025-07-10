@@ -14,6 +14,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 
+from unet_components import DoubleConv, Down, Up, OutConv
+
 MODEL_REGISTRY = {}
 
 def register_model(name):
@@ -202,3 +204,74 @@ class UNetAttn(nn.Module):
         out = attn_output.permute(0, 2, 1).view(b, c, h, w)  # (batch_size, channels, h*w)
         out = self.output_layer(out)
         return out
+    
+@register_model("unet")
+class UNet(nn.Module):
+    def __init__(self, in_channels, out_channels, latent_dim, time_emb_dim):
+        super(UNet, self).__init__()
+
+        """
+        UNet architecture for diffusion models.
+
+        Takes input images of size 32x32 and downsamples them through several blocks:
+        32x32 -> 16x16 -> 8x8 -> 4x4, then upsamples back to 32x32.
+        """
+
+        self.dim4 = latent_dim
+        self.dim3 = latent_dim // 2
+        self.dim2 = latent_dim // 4
+        self.dim1 = latent_dim // 8
+
+        
+        self.time_mlp = nn.Sequential(
+            nn.Linear(time_emb_dim, time_emb_dim * 4),
+            nn.SiLU(),
+            nn.Linear(time_emb_dim * 4, time_emb_dim)
+        )
+
+        self.time_emb_dim = time_emb_dim
+
+        # Time projection layers
+        self.t_proj1 = nn.Linear(time_emb_dim, 64)
+        self.t_proj2 = nn.Linear(time_emb_dim, self.dim1)
+        self.t_proj3 = nn.Linear(time_emb_dim, self.dim2)
+        self.t_proj4 = nn.Linear(time_emb_dim, self.dim3)
+        self.t_proj5 = nn.Linear(time_emb_dim, self.dim4)
+
+        # Encoding blocks
+        self.inc = DoubleConv(in_channels, 64)
+        self.down1 = Down(64, self.dim1)
+        self.down2 = Down(self.dim1, self.dim2)
+        self.down3 = Down(self.dim2, self.dim3)
+        self.down4 = Down(self.dim3, self.dim4)
+
+        # Decoding blocks
+        self.up1 = Up(self.dim4, self.dim3)
+        self.up2 = Up(self.dim3, self.dim2)
+        self.up3 = Up(self.dim2, self.dim1)
+        self.up4 = Up(self.dim1, 64)
+        self.outc = OutConv(64, out_channels)
+
+    def forward(self, x, t):
+        t_input = t.float().squeeze(-1)
+        if t_input.ndim == 0:
+            t_input = t_input.unsqueeze(0)
+        sin_emb = sinusoidal_positional_encoding(t_input, self.time_emb_dim)
+        temb = self.time_mlp(sin_emb)
+
+        x1 = self.inc(x)
+        x1 = x1 + self.t_proj1(temb)[:, :, None, None]
+        x2 = self.down1(x1)
+        x2 = x2 + self.t_proj2(temb)[:, :, None, None]
+        x3 = self.down2(x2)
+        x3 = x3 + self.t_proj3(temb)[:, :, None, None]
+        x4 = self.down3(x3)
+        x4 = x4 + self.t_proj4(temb)[:, :, None, None]
+        x5 = self.down4(x4)
+        x5 = x5 + self.t_proj5(temb)[:, :, None, None]
+        x = self.up1(x5, x4)
+        x = self.up2(x, x3)
+        x = self.up3(x, x2)
+        x = self.up4(x, x1)
+        logits = self.outc(x)
+        return logits
