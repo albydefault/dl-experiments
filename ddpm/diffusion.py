@@ -30,10 +30,16 @@ def make_diffusion_schedule(step_count, device) -> Dict[str, torch.Tensor]:
 
 def train(model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer, criterion: torch.nn.Module, scheduler: torch.optim.lr_scheduler._LRScheduler, num_epochs: int, step_count: int, schedule: Dict[str, torch.Tensor]) -> torch.nn.Module:
     global_step = 0
-    
-    _, _, _, sqrt_acum, sqrt_1macum = schedule.values()
 
-    
+    # Extract schedule values more safely
+    betas = schedule['betas']
+    alphas = schedule['alphas']
+    alphas_cumprod = schedule['alphas_cumprod']
+    sqrt_acum = schedule['sqrt_acum']
+    sqrt_1macum = schedule['sqrt_1macum']
+
+    ema_model = copy.deepcopy(model).eval().requires_grad_(False)
+
     for epoch in range(num_epochs):
         running_loss = 0.0
 
@@ -42,12 +48,12 @@ def train(model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, optim
             images = images.to(device)
 
             # Sample random time steps
-            t = torch.randint(0, step_count, (images.size(0),1), device=device)
+            t = torch.randint(0, step_count, (images.size(0),), device=device)
             noise = torch.randn_like(images)
 
-
-            noisy_images = sqrt_acum[t].view(-1, 1, 1, 1) * images + sqrt_1macum[t].view(-1, 1, 1, 1) * noise
-            predicted_noise = model(noisy_images, t)
+            # Add noise to images according to the diffusion schedule
+            noisy_images = sqrt_acum[t].reshape(-1, 1, 1, 1) * images + sqrt_1macum[t].reshape(-1, 1, 1, 1) * noise
+            predicted_noise = model(noisy_images, t.unsqueeze(1))
 
             loss = criterion(predicted_noise, noise)
             optimizer.zero_grad()
@@ -55,6 +61,11 @@ def train(model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, optim
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
+
+            # Update EMA model
+            with torch.no_grad():
+                for param, ema_param in zip(model.parameters(), ema_model.parameters()):
+                    ema_param.data = 0.9999 * ema_param.data + 0.0001 * param.data
 
             running_loss += loss.item()
 
@@ -64,9 +75,9 @@ def train(model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, optim
                     "noisy_images": wandb.Image((1 + noisy_images[:8].clamp(-1, 1)) / 2),
                 }, step=global_step)
 
-                
-                reshaped_sqrt_1macum = sqrt_1macum[t].view(-1, 1, 1, 1)
-                reshaped_sqrt_acum = sqrt_acum[t].view(-1, 1, 1, 1)
+                # Calculate predicted original images for visualization
+                reshaped_sqrt_1macum = sqrt_1macum[t].reshape(-1, 1, 1, 1)
+                reshaped_sqrt_acum = sqrt_acum[t].reshape(-1, 1, 1, 1)
                 predicted_images = (noisy_images - reshaped_sqrt_1macum * predicted_noise) / reshaped_sqrt_acum
 
                 wandb.log({
@@ -74,7 +85,7 @@ def train(model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, optim
                 }, step=global_step)
 
                 with torch.no_grad():
-                    samples = sample(model=model, schedule=schedule, step_count=step_count, img_size=images.size()[1:])
+                    samples = sample(model=ema_model, schedule=schedule, step_count=step_count, img_size=images.size()[1:])
                     samples = (samples.clamp(-1, 1) + 1) / 2
                     
                     wandb.log({
@@ -118,15 +129,20 @@ def sample(model, schedule, step_count, img_size=(3, 32, 32), num_images=8,):
 
         for t in range(step_count-1, -1, -1):
             # Compute the predicted noise
-            t_tensor = torch.full((num_images,1), t, device=device, dtype=torch.long)
-            predicted_noise = model(x, t_tensor)
+            t_tensor = torch.full((num_images,), t, device=device, dtype=torch.long)
+            predicted_noise = model(x, t_tensor.unsqueeze(1))
+            
+            # Calculate mean of the previous step
             x_mean = (x - (1 - alphas[t]) * predicted_noise / sqrt_1macum[t]) / sqrt_alphas[t]
 
-            if t > 0:
+            if t > 1:
+                # Calculate posterior variance for adding noise
                 posterior_var = betas[t] * (1 - alphas_cumprod[t-1])/(1 - alphas_cumprod[t])
-                sigma = torch.sqrt(posterior_var + 1e-20)
+                sigma = torch.sqrt(posterior_var + 1e-20)  # Add small epsilon to prevent numerical issues
 
                 x = x_mean + sigma * torch.randn_like(x)
+                # Ensure x is within the range [-1, 1]
+                x = torch.clamp(x, -1, 1)
             else:
                 x = x_mean
                         
