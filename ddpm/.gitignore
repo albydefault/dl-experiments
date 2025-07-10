@@ -10,3 +10,6 @@ wandb/
 # ignore generated assets and notes
 *.svg
 design.md
+
+# ignore other repos
+Pytorch-UNet
