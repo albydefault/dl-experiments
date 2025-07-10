@@ -1,18 +1,20 @@
 import torch
 from tqdm import tqdm
 import wandb
+from typing import Dict, Tuple
+import copy
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Schedule for betas
-def cosine_beta_schedule(timesteps, s=0.008):
+def cosine_beta_schedule(timesteps, s=0.008)-> torch.Tensor:
     steps = torch.arange(timesteps + 1, dtype=torch.float32)
     alphas_cumprod = torch.cos(((steps / timesteps) + s) / (1 + s) * torch.pi * 0.5) ** 2
     alphas_cumprod /= alphas_cumprod[0].clone()
     betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
     return torch.clamp(betas, 1e-5, 0.999)
 
-def make_diffusion_schedule(step_count, device):
+def make_diffusion_schedule(step_count, device) -> Dict[str, torch.Tensor]:
     betas = cosine_beta_schedule(step_count)
     alphas = 1 - betas
     alphas_cumprod = torch.cumprod(alphas, dim=0)
@@ -26,7 +28,7 @@ def make_diffusion_schedule(step_count, device):
     }
 
 
-def train(model, dataloader, optimizer, criterion, scheduler, num_epochs, step_count, schedule):
+def train(model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer, criterion: torch.nn.Module, scheduler: torch.optim.lr_scheduler._LRScheduler, num_epochs: int, step_count: int, schedule: Dict[str, torch.Tensor]) -> torch.nn.Module:
     global_step = 0
     
     _, _, _, sqrt_acum, sqrt_1macum = schedule.values()
