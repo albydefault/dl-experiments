@@ -63,6 +63,7 @@ def train(model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, optim
             optimizer.step()
 
             # Update EMA model
+            decay = 0.9999
             with torch.no_grad():
                 for param, ema_param in zip(model.parameters(), ema_model.parameters()):
                     ema_param.data = 0.9999 * ema_param.data + 0.0001 * param.data
