@@ -115,7 +115,7 @@ def train(model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, optim
     return model
 
 ### Sampling
-def sample(model, schedule, step_count, img_size=(3, 32, 32), num_images=8,):
+def sample(model: torch.nn.Module, schedule: dict, step_count: int, img_size=(3, 32, 32), num_images=8):
     model.eval()
     betas = schedule['betas']
     alphas = schedule['alphas']
@@ -136,15 +136,16 @@ def sample(model, schedule, step_count, img_size=(3, 32, 32), num_images=8,):
             # Calculate mean of the previous step
             x_mean = (x - (1 - alphas[t]) * predicted_noise / sqrt_1macum[t]) / sqrt_alphas[t]
 
-            if t > 1:
+            if t > 0:
                 # Calculate posterior variance for adding noise
                 posterior_var = betas[t] * (1 - alphas_cumprod[t-1])/(1 - alphas_cumprod[t])
                 sigma = torch.sqrt(posterior_var + 1e-20)  # Add small epsilon to prevent numerical issues
 
                 x = x_mean + sigma * torch.randn_like(x)
-                # Ensure x is within the range [-1, 1]
-                x = torch.clamp(x, -1, 1)
+
             else:
                 x = x_mean
+        
+        x = x.clamp(-1, 1)
                         
         return x
