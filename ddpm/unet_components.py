@@ -31,18 +31,22 @@ class Down(nn.Module):
         return self.maxpool_conv(x)
     
 class Up(nn.Module):
-    def __init__(self, in_channels, out_channels, bilinear=False):
+    def __init__(self, in_channels, skip_channels, out_channels, bilinear=False):
         super().__init__()
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-            self.conv = DoubleConv(in_channels, out_channels)
+            up_out = in_channels
         else:
             self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
-            self.conv = DoubleConv(in_channels, out_channels)
+            up_out = out_channels
 
-    def forward(self, x1, x2):
-        x1 = self.up(x1)
-        x = torch.cat([x2, x1], dim=1)
+        self.conv = DoubleConv(skip_channels + up_out, out_channels)
+        
+
+    def forward(self, x_low, x_skip):
+        x_low = self.up(x_low)
+        x = torch.cat([x_skip, x_low], dim=1)
+
         return self.conv(x)
     
 class OutConv(nn.Module):

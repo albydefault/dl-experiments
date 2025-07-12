@@ -246,10 +246,10 @@ class UNet(nn.Module):
         self.down4 = Down(self.dim3, self.dim4)
 
         # Decoding blocks
-        self.up1 = Up(self.dim4, self.dim3)
-        self.up2 = Up(self.dim3, self.dim2)
-        self.up3 = Up(self.dim2, self.dim1)
-        self.up4 = Up(self.dim1, 64)
+        self.up1 = Up(self.dim4, self.dim3, self.dim3)
+        self.up2 = Up(self.dim3, self.dim2, self.dim2)
+        self.up3 = Up(self.dim2, self.dim1, self.dim1)
+        self.up4 = Up(self.dim1, 64, 64)
         self.outc = OutConv(64, out_channels)
 
     def forward(self, x, t):
