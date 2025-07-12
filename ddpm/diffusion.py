@@ -53,7 +53,7 @@ def train(model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, optim
 
             # Add noise to images according to the diffusion schedule
             noisy_images = sqrt_acum[t].reshape(-1, 1, 1, 1) * images + sqrt_1macum[t].reshape(-1, 1, 1, 1) * noise
-            predicted_noise = model(noisy_images, t.unsqueeze(1))
+            predicted_noise = model(noisy_images, t.unsqueeze(1) / step_count)
 
             loss = criterion(predicted_noise, noise)
             optimizer.zero_grad()
@@ -131,7 +131,7 @@ def sample(model, schedule, step_count, img_size=(3, 32, 32), num_images=8,):
         for t in range(step_count-1, -1, -1):
             # Compute the predicted noise
             t_tensor = torch.full((num_images,), t, device=device, dtype=torch.long)
-            predicted_noise = model(x, t_tensor.unsqueeze(1))
+            predicted_noise = model(x, t_tensor.unsqueeze(1) / step_count)
             
             # Calculate mean of the previous step
             x_mean = (x - (1 - alphas[t]) * predicted_noise / sqrt_1macum[t]) / sqrt_alphas[t]
