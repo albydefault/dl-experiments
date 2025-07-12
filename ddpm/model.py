@@ -259,19 +259,35 @@ class UNet(nn.Module):
         sin_emb = sinusoidal_positional_encoding(t_input, self.time_emb_dim)
         temb = self.time_mlp(sin_emb)
 
+        # Encoding path
         x1 = self.inc(x)
         x1 = x1 + self.t_proj1(temb)[:, :, None, None]
+        x1 = F.silu(x1)
         x2 = self.down1(x1)
         x2 = x2 + self.t_proj2(temb)[:, :, None, None]
+        x2 = F.silu(x2)
         x3 = self.down2(x2)
         x3 = x3 + self.t_proj3(temb)[:, :, None, None]
+        x3 = F.silu(x3)
         x4 = self.down3(x3)
         x4 = x4 + self.t_proj4(temb)[:, :, None, None]
+        x4 = F.silu(x4)
         x5 = self.down4(x4)
         x5 = x5 + self.t_proj5(temb)[:, :, None, None]
+        x5 = F.silu(x5)
+
+        # Decoding path
         x = self.up1(x5, x4)
+        x = x + self.t_proj4(temb)[:, :, None, None]
+        x = F.silu(x)
         x = self.up2(x, x3)
+        x = x + self.t_proj3(temb)[:, :, None, None]
+        x = F.silu(x)
         x = self.up3(x, x2)
+        x = x + self.t_proj2(temb)[:, :, None, None]
+        x = F.silu(x)
         x = self.up4(x, x1)
+        x = x + self.t_proj1(temb)[:, :, None, None]
+        x = F.silu(x)
         logits = self.outc(x)
         return logits
