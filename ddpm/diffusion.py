@@ -136,6 +136,9 @@ def sample(model: torch.nn.Module, schedule: dict, step_count: int, img_size=(3,
             # Calculate mean of the previous step
             x_mean = (x - (1 - alphas[t]) * predicted_noise / sqrt_1macum[t]) / sqrt_alphas[t]
 
+            s = torch.quantile(x_mean.abs().view(x_mean.size(0), -1), 0.995, dim=1)
+            x_mean = (x_mean / s[:, None, None, None]).clamp(-1, 1)
+
             if t > 0:
                 # Calculate posterior variance for adding noise
                 posterior_var = betas[t] * (1 - alphas_cumprod[t-1])/(1 - alphas_cumprod[t])
@@ -145,7 +148,5 @@ def sample(model: torch.nn.Module, schedule: dict, step_count: int, img_size=(3,
 
             else:
                 x = x_mean
-        
-        x = x.clamp(-1, 1)
                         
         return x
