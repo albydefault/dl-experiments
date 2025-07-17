@@ -14,7 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 
-from unet_components import DoubleConv, Down, Up, OutConv
+from unet_components import DoubleConv, Down, Up, OutConv, AttentionBlock
 
 MODEL_REGISTRY = {}
 
@@ -184,26 +184,6 @@ class RecurrentWNet32(nn.Module):
         second_x = self.second(x, t)
         third_x = self.second(first_x, t)
         return (first_x + second_x + third_x) / 3
-
-@register_model("unet_attn")
-class UNetAttn(nn.Module):
-    def __init__(self, in_channels=3, out_channels=3, latent_dim=256, time_emb_dim=256):
-        super(UNetAttn, self).__init__()
-        self.unet = UNet32(in_channels, 16, latent_dim, time_emb_dim)
-        self.attn = nn.MultiheadAttention(embed_dim=16, num_heads=8, batch_first=True)
-        self.pos_emb = nn.Parameter(torch.randn(32 * 32, 16))
-        self.output_layer = nn.Conv2d(16, out_channels, kernel_size=1)
-
-    def forward(self, x, t):
-        x = self.unet(x, t)
-        b, c, h, w = x.size()
-
-        x_flat = x.view(b, c, -1).permute(0, 2, 1)  # (batch_size, h*w, channels)
-        x_flat += self.pos_emb.unsqueeze(0)  # Add positional encoding
-        attn_output, _ = self.attn(x_flat, x_flat, x_flat)
-        out = attn_output.permute(0, 2, 1).view(b, c, h, w)  # (batch_size, channels, h*w)
-        out = self.output_layer(out)
-        return out
     
 @register_model("unet")
 class UNet(nn.Module):
@@ -288,6 +268,201 @@ class UNet(nn.Module):
         x = F.silu(x)
         x = self.up4(x, x1)
         x = x + self.t_proj1(temb)[:, :, None, None]
+        x = F.silu(x)
+        logits = self.outc(x)
+        return logits
+    
+@register_model("unet_attention")
+class UNet_attention(nn.Module):
+    def __init__(self, in_channels, out_channels, latent_dim, time_emb_dim):
+        super(UNet_attention, self).__init__()
+
+        """
+        UNet architecture for diffusion models.
+
+        Takes input images of size 32x32 and downsamples them through several blocks:
+        32x32 -> 16x16 -> 8x8 -> 4x4, then upsamples back to 32x32.
+        """
+
+        self.dim4 = latent_dim
+        self.dim3 = latent_dim // 2
+        self.dim2 = latent_dim // 4
+        self.dim1 = latent_dim // 8
+
+        
+        self.time_mlp = nn.Sequential(
+            nn.Linear(time_emb_dim, time_emb_dim * 4),
+            nn.SiLU(),
+            nn.Linear(time_emb_dim * 4, time_emb_dim)
+        )
+
+        self.time_emb_dim = time_emb_dim
+
+        # Time projection layers
+        self.t_proj1 = nn.Linear(time_emb_dim, 64)
+        self.t_proj2 = nn.Linear(time_emb_dim, self.dim1)
+        self.t_proj3 = nn.Linear(time_emb_dim, self.dim2)
+        self.t_proj4 = nn.Linear(time_emb_dim, self.dim3)
+        self.t_proj5 = nn.Linear(time_emb_dim, self.dim4)
+
+        # Encoding blocks
+        self.inc = DoubleConv(in_channels, 64)
+        self.down1 = Down(64, self.dim1)
+        self.down2 = Down(self.dim1, self.dim2)
+        self.down3 = Down(self.dim2, self.dim3)
+        self.down4 = Down(self.dim3, self.dim4)
+
+        # Decoding blocks
+        self.up1 = Up(self.dim4, self.dim3, self.dim3)
+        self.up2 = Up(self.dim3, self.dim2, self.dim2)
+        self.up3 = Up(self.dim2, self.dim1, self.dim1)
+        self.up4 = Up(self.dim1, 64, 64)
+        self.outc = OutConv(64, out_channels)
+
+        self.attn1 = AttentionBlock(self.dim4)
+        self.attn2_1 = AttentionBlock(self.dim3)
+        self.attn2_2 = AttentionBlock(self.dim3)
+
+
+    def forward(self, x, t):
+        t_input = t.float().squeeze(-1)
+        if t_input.ndim == 0:
+            t_input = t_input.unsqueeze(0)
+        sin_emb = sinusoidal_positional_encoding(t_input, self.time_emb_dim)
+        temb = self.time_mlp(sin_emb)
+
+        # Encoding path
+        x1 = self.inc(x)
+        x1 = x1 + self.t_proj1(temb)[:, :, None, None]
+        x1 = F.silu(x1)
+        x2 = self.down1(x1)
+        x2 = x2 + self.t_proj2(temb)[:, :, None, None]
+        x2 = F.silu(x2)
+        x3 = self.down2(x2)
+        x3 = x3 + self.t_proj3(temb)[:, :, None, None]
+        x3 = F.silu(x3)
+        x4 = self.down3(x3)
+        x4 = x4 + self.t_proj4(temb)[:, :, None, None]
+        x4 = F.silu(x4)
+        x4 = self.attn2_1(x4) # Attention on the downsampled feature map
+
+        x5 = self.down4(x4)
+        x5 = x5 + self.t_proj5(temb)[:, :, None, None]
+        x5 = F.silu(x5)
+        x5 = self.attn1(x5) # Attention on the bottleneck feature map
+
+
+        # Decoding path
+        x = self.up1(x5, x4)
+        x = x + self.t_proj4(temb)[:, :, None, None]
+        x = F.silu(x)
+        x = self.attn2_2(x) # Attention on the upsampled feature map
+
+        x = self.up2(x, x3)
+        x = x + self.t_proj3(temb)[:, :, None, None]
+        x = F.silu(x)
+        x = self.up3(x, x2)
+        x = x + self.t_proj2(temb)[:, :, None, None]
+        x = F.silu(x)
+        x = self.up4(x, x1)
+        x = x + self.t_proj1(temb)[:, :, None, None]
+        x = F.silu(x)
+        logits = self.outc(x)
+        return logits
+
+
+@register_model("adaptive_unet")
+class AdaptiveUNet(nn.Module):
+    def __init__(self, in_channels, out_channels, latent_dim, time_emb_dim):
+        super(AdaptiveUNet, self).__init__()
+        self.dim4 = latent_dim
+        self.dim3 = latent_dim // 2
+        self.dim2 = latent_dim // 4
+        self.dim1 = latent_dim // 8
+
+        
+        self.time_mlp = nn.Sequential(
+            nn.Linear(time_emb_dim, time_emb_dim * 4),
+            nn.SiLU(),
+            nn.Linear(time_emb_dim * 4, time_emb_dim)
+        )
+
+        self.time_emb_dim = time_emb_dim
+
+        # Time projection layers
+        self.t_proj1 = nn.Linear(time_emb_dim, 64 * 2)
+        self.t_proj2 = nn.Linear(time_emb_dim, self.dim1 * 2)
+        self.t_proj3 = nn.Linear(time_emb_dim, self.dim2 * 2)
+        self.t_proj4 = nn.Linear(time_emb_dim, self.dim3 * 2)
+        self.t_proj5 = nn.Linear(time_emb_dim, self.dim4 * 2)
+
+        # Encoding blocks
+        self.inc = DoubleConv(in_channels, 64)
+        self.down1 = Down(64, self.dim1)
+        self.down2 = Down(self.dim1, self.dim2)
+        self.down3 = Down(self.dim2, self.dim3)
+        self.down4 = Down(self.dim3, self.dim4)
+
+        # Decoding blocks
+        self.up1 = Up(self.dim4, self.dim3, self.dim3)
+        self.up2 = Up(self.dim3, self.dim2, self.dim2)
+        self.up3 = Up(self.dim2, self.dim1, self.dim1)
+        self.up4 = Up(self.dim1, 64, 64)
+        self.outc = OutConv(64, out_channels)
+
+        self.attn1 = AttentionBlock(self.dim4)
+        self.attn2_1 = AttentionBlock(self.dim3)
+        self.attn2_2 = AttentionBlock(self.dim3)
+
+
+    def forward(self, x, t):
+        t_input = t.float().squeeze(-1)
+        if t_input.ndim == 0:
+            t_input = t_input.unsqueeze(0)
+        sin_emb = sinusoidal_positional_encoding(t_input, self.time_emb_dim)
+        temb = self.time_mlp(sin_emb)
+
+        temb_1 = self.t_proj1(temb)
+        temb_2 = self.t_proj2(temb)
+        temb_3 = self.t_proj3(temb)
+        temb_4 = self.t_proj4(temb)
+        temb_5 = self.t_proj5(temb)
+
+        # Encoding path
+        x1 = self.inc(x)
+        x1 = (x1 * temb_1[:, :64, None, None]) + temb_1[:, 64:, None, None]
+        x1 = F.silu(x1)
+        x2 = self.down1(x1)
+        x2 = (x2 * temb_2[:, :self.dim1, None, None]) + temb_2[:, self.dim1:, None, None]
+        x2 = F.silu(x2)
+        x3 = self.down2(x2)
+        x3 = (x3 * temb_3[:, :self.dim2, None, None]) + temb_3[:, self.dim2:, None, None]
+        x3 = F.silu(x3)
+        x4 = self.down3(x3)
+        x4 = (x4 * temb_4[:, :self.dim3, None, None]) + temb_4[:, self.dim3:, None, None]
+        x4 = F.silu(x4)
+        x4 = self.attn2_1(x4) # Attention on the downsampled feature map
+
+        x5 = self.down4(x4)
+        x5 = (x5 * temb_5[:, :self.dim4, None, None]) + temb_5[:, self.dim4:, None, None]
+        x5 = F.silu(x5)
+        x5 = self.attn1(x5) # Attention on the bottleneck feature map
+
+
+        # Decoding path
+        x = self.up1(x5, x4)
+        x = (x * temb_4[:, :self.dim3, None, None]) + temb_4[:, self.dim3:, None, None]
+        x = F.silu(x)
+        x = self.attn2_2(x) # Attention on the upsampled feature map
+
+        x = self.up2(x, x3)
+        x = (x * temb_3[:, :self.dim2, None, None]) + temb_3[:, self.dim2:, None, None]
+        x = F.silu(x)
+        x = self.up3(x, x2)
+        x = (x * temb_2[:, :self.dim1, None, None]) + temb_2[:, self.dim1:, None, None]
+        x = F.silu(x)
+        x = self.up4(x, x1)
+        x = (x * temb_1[:, :64, None, None]) + temb_1[:, 64:, None, None]
         x = F.silu(x)
         logits = self.outc(x)
         return logits
