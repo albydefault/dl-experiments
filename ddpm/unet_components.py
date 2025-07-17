@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels, mid_channels=None):
@@ -58,3 +59,28 @@ class OutConv(nn.Module):
         return self.conv(x)
     
 
+class AttentionBlock(nn.Module):
+    def __init__(self, channels, num_heads=1):
+        super().__init__()
+        self.num_heads = num_heads
+        assert channels % num_heads == 0
+
+        self.norm = self.norm_layer(channels)
+        self.qkv = nn.Conv2d(channels, channels * 3, kernel_size=1, bias=False)
+        self.proj = nn.Conv2d(channels, channels, kernel_size=1)
+    
+    @staticmethod
+    def norm_layer(channels):
+        return nn.GroupNorm(32, channels)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        qkv = self.qkv(self.norm(x))
+        q, k, v = qkv.reshape(B * self.num_heads, -1, H * W).chunk(3, dim=1)
+        scale = 1. / math.sqrt(math.sqrt(C // self.num_heads))
+        attn = torch.einsum("bct,bcs->bts", q * scale, k * scale)
+        attn = attn.softmax(dim=-1)
+        h = torch.einsum("bts,bcs->bct", attn, v)
+        h = h.reshape(B, -1, H, W)
+        h = self.proj(h)
+        return h + x
