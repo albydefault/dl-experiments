@@ -1,0 +1,21 @@
+project_name: ddpm
+dataset: celeba
+epochs: 100
+batch_size: 32
+learning_rate: 0.0001
+device: cuda
+seed: 42
+in_channels: 3
+out_channels: 3
+resize: [64, 64]
+conditioning_dim: 128
+layers: [32, 64, 128, 256]
+attention_layers: [128, 256]
+dropout: 0.1
+num_heads: 8
+diffusion_steps: 1000
+diffusion_schedule: linear
+ema_decay: 0.9999
+log_interval: 100
+save_interval: 100
+model_save_path: ./models/

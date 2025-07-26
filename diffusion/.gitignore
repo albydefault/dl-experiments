@@ -1,0 +1,18 @@
+# ignore environment
+.venv
+
+# ignore Python and editor caches
+__pycache__/
+.vscode/
+
+# ignore experiment outputs and large model files
+runs/
+wandb/
+*.pth
+
+# ignore generated assets and notes
+*.svg
+design.md
+
+# ignore other repos
+Pytorch-UNet
