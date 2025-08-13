@@ -10,7 +10,8 @@ runs/
 wandb/
 *.pth
 
-# ignore generated assets and notes
+# ignore assets and notes
+data/
 *.svg
 design.md
 

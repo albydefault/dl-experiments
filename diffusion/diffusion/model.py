@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .model_components import FiLMGroupNorm, DoubleConv, Down, Up, AttentionBlock
+from diffusion.model_components import FiLMGroupNorm, DoubleConv, Down, Up, AttentionBlock
 import math
 
 class UNet(nn.Module):
@@ -153,3 +153,4 @@ class UNet(nn.Module):
                 up_attention_index += 1
 
         return self.output_conv(x)
+

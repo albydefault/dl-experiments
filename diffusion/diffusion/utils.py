@@ -11,7 +11,6 @@ def load_yaml_config(config_path: str) -> dict:
     return config
 
 
-
 def denormalize_image_tensor(image_tensor: torch.Tensor):
     """
     Denormalizes an image tensor by scaling it to the range [0, 1].
@@ -73,3 +72,4 @@ def create_ddpm_schedule(timesteps: int = 1000,
     }
     
     return schedule
+

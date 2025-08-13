@@ -1,16 +1,16 @@
 import argparse
-
 from pathlib import Path
 import datetime
+import os
 
 import torch
 import torch.nn as nn
 import numpy as np
 
-from .utils import load_yaml_config, create_ddpm_schedule
-from .train import train
-from .data import make_data_loader
-from .model import UNet
+from diffusion.utils import load_yaml_config, create_ddpm_schedule
+from diffusion.train import train
+from diffusion.data import make_data_loader
+from diffusion.model import UNet
 
 
 
@@ -22,7 +22,9 @@ def main():
     parser.add_argument('--epochs', type=int, default=100, help='Number of epochs to train')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training')
     parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate for the optimizer')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to run the model on')
+    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to run the model on (e.g., cpu, cuda, or GPU index)')
+    parser.add_argument('--dataset_root', type=str, default=os.environ.get('DATASET_DIR', './data'), help='Root directory for datasets')
+    parser.add_argument('--use_wandb', action='store_true', help='Enable Weights & Biases logging if installed')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
 
     args = parser.parse_args()
@@ -35,7 +37,7 @@ def main():
     config["device"] = args.device
 
     if args.device.isdigit():
-        torch.cuda.set_device(args.device)
+        torch.cuda.set_device(int(args.device))
         device = torch.device("cuda")
     elif args.device == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
@@ -58,7 +60,9 @@ def main():
     train_loader, val_loader = make_data_loader(
         dataset_name=config['dataset'],
         batch_size=config['batch_size'],
-        resize=config.get('resize', (32, 32)),)
+        resize=config.get('resize', (32, 32)),
+        root=args.dataset_root,
+    )
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config['learning_rate'])
     criterion = nn.MSELoss()
@@ -89,7 +93,10 @@ def main():
         diffusion_schedule=diffusion_schedule,
         ema_decay=config['ema_decay'],
         device=device,
-        config=config
+        config={
+            **config,
+            'use_wandb': bool(args.use_wandb or config.get('use_wandb', False)),
+        }
     )
 
     # list files in the model save directory to delete the folder if empty

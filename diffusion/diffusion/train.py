@@ -1,22 +1,23 @@
 import torch
 import copy
 from tqdm import tqdm
-import wandb
 
-from .utils import denormalize_image_tensor
+from diffusion.utils import denormalize_image_tensor
 
-def train(model: torch.nn.Module,
-          train_loader: torch.utils.data.DataLoader,
-          test_loader: torch.utils.data.DataLoader | None,
-          optimizer: torch.optim.Optimizer,
-          criterion: torch.nn.Module,
-          scheduler: torch.optim.lr_scheduler.LRScheduler | None,
-          epochs: int,
-          diffusion_steps: int,
-          diffusion_schedule: dict[str, torch.Tensor],
-          ema_decay: float,
-          device: torch.device,
-          config: dict) -> torch.nn.Module:
+def train(
+    model: torch.nn.Module,
+    train_loader: torch.utils.data.DataLoader,
+    test_loader: torch.utils.data.DataLoader | None,
+    optimizer: torch.optim.Optimizer,
+    criterion: torch.nn.Module,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None,
+    epochs: int,
+    diffusion_steps: int,
+    diffusion_schedule: dict[str, torch.Tensor],
+    ema_decay: float,
+    device: torch.device,
+    config: dict,
+) -> torch.nn.Module:
 
     """
     Trains the provided diffusion model.
@@ -52,7 +53,21 @@ def train(model: torch.nn.Module,
             }
     """
 
-    with wandb.init(project=config['project_name'], config=config) as run:
+    # Optional W&B setup
+    use_wandb = bool(config.get('use_wandb', False))
+    run = None
+    if use_wandb:
+        try:
+            import wandb  # noqa: F401
+            run = wandb.init(project=config.get('project_name', 'diffusion'), config=config)
+        except Exception:
+            use_wandb = False
+
+    def log_fn(data: dict):
+        if use_wandb and run is not None:
+            run.log(data)
+
+    try:
         global_step = 0
         
         sqrt_cumulative_alphas = diffusion_schedule['sqrt_cumulative_alphas'].to(device)
@@ -105,7 +120,7 @@ def train(model: torch.nn.Module,
                 running_loss += loss.item()
 
                 # LOGS
-                run.log({
+                log_fn({
                     'train_loss': loss.item(),
                     'global_step': global_step,
                     'lr': scheduler.get_last_lr()[0] if scheduler else optimizer.param_groups[0]['lr'],
@@ -113,7 +128,7 @@ def train(model: torch.nn.Module,
                     'avg_timestep': t.float().mean().item(),  # Average timestep being trained
                 })
 
-                run.log({
+                log_fn({
                     'loss_timestep_early': per_sample_loss[t < diffusion_steps // 4].mean().item() if (t<diffusion_steps // 4).any() else None,
                     'loss_timestep_mid_early': per_sample_loss[(t >= diffusion_steps // 4) & (t < diffusion_steps // 2)].mean().item() if ((t >= diffusion_steps // 4) & (t < diffusion_steps // 2)).any() else None,
                     'loss_timestep_mid_late': per_sample_loss[(t >= diffusion_steps // 2) & (t < diffusion_steps * 3 // 4)].mean().item() if ((t >= diffusion_steps // 2) & (t < diffusion_steps * 3 // 4)).any() else None,
@@ -140,13 +155,15 @@ def train(model: torch.nn.Module,
                         img_array = img_tensor.numpy().clip(0, 1)
                         return img_array
 
-                    run.log({
-                        'original_images': [wandb.Image(img) for img in format_images_for_wandb(images[:8])],
-                        'noisy_images': [wandb.Image(img) for img in format_images_for_wandb(noisy_images[:8])],
-                        'denoised_images': [wandb.Image(img) for img in format_images_for_wandb(predicted_images[:8])],
-                        'ema_denoised_images': [wandb.Image(img) for img in format_images_for_wandb(ema_predicted_images[:8])],
-                        'ema_loss': ema_loss.item(),
-                    })
+                    if use_wandb and run is not None:
+                        import wandb
+                        run.log({
+                            'original_images': [wandb.Image(img) for img in format_images_for_wandb(images[:8])],
+                            'noisy_images': [wandb.Image(img) for img in format_images_for_wandb(noisy_images[:8])],
+                            'denoised_images': [wandb.Image(img) for img in format_images_for_wandb(predicted_images[:8])],
+                            'ema_denoised_images': [wandb.Image(img) for img in format_images_for_wandb(ema_predicted_images[:8])],
+                            'ema_loss': ema_loss.item(),
+                        })
 
                     if test_loader is not None:
                         model_test_loss = test(model, test_loader, criterion, diffusion_steps, diffusion_schedule, device)
@@ -154,7 +171,7 @@ def train(model: torch.nn.Module,
                         
                         ema_model_test_loss = test(ema_model, test_loader, criterion, diffusion_steps, diffusion_schedule, device)
 
-                        run.log({
+                        log_fn({
                             'model_test_loss': model_test_loss,
                             'ema_model_test_loss': ema_model_test_loss,
                         })
@@ -162,12 +179,12 @@ def train(model: torch.nn.Module,
 
                 if global_step % (config['log_interval'] * 10) == 0:
                     param_norm = sum(p.norm().item() for p in model.parameters())
-                    run.log({'param_norm': param_norm})
+                    log_fn({'param_norm': param_norm})
 
                 global_step += 1
 
             epoch_loss = running_loss / len(train_loader)
-            run.log({'epoch_loss': epoch_loss, 'epoch': epoch})
+            log_fn({'epoch_loss': epoch_loss, 'epoch': epoch})
             print(f'Epoch [{epoch + 1}/{epochs}], Loss: {epoch_loss:.4f}')
 
             if epoch % config.get('save_interval', 100) == 0:
@@ -175,11 +192,13 @@ def train(model: torch.nn.Module,
                 torch.save(model.state_dict(), f'{config.get("model_save_path", ".")}/model_epoch_{epoch + 1}.pth')
                 torch.save(ema_model.state_dict(), f'{config.get("model_save_path", ".")}/ema_model_epoch_{epoch + 1}.pth')
                 print(f'Models saved for epoch {epoch + 1}')
-    
         # Save the final model
         torch.save(model.state_dict(), f'{config.get("model_save_path", ".")}/final_model.pth')
         torch.save(ema_model.state_dict(), f'{config.get("model_save_path", ".")}/final_ema_model.pth')
         print('Final models saved.')
+    finally:
+        if use_wandb and run is not None:
+            run.finish()
     return model
 
 def test(model: torch.nn.Module,

@@ -78,8 +78,10 @@ class Up(nn.Module):
                  conditioning_dim: int,
                  dropout: float = 0.0):
         super(Up, self).__init__()
-        self.conv = DoubleConv(in_channels, out_channels, mid_channels, conditioning_dim, dropout)
+        # First upsample to out_channels, then concatenate with skip (out_channels),
+        # so DoubleConv should accept 2*out_channels as input.
         self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
+        self.conv = DoubleConv(out_channels * 2, out_channels, mid_channels, conditioning_dim, dropout)
 
     def forward(self, x: torch.Tensor, skip_connection: torch.Tensor, conditioning: torch.Tensor) -> torch.Tensor:
         x = self.up(x)
